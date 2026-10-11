@@ -3346,6 +3346,17 @@ public final class StandaloneReactionAnimation: ASDisplayNode {
         }
         onHit?()
         
+        // A burst of sparkles from the tapped spot, in the theme's accent plus warm highlights.
+        if self.isNodeLoaded {
+            let burstCenter = targetView.convert(CGPoint(x: targetView.bounds.midX, y: targetView.bounds.midY), to: self.view)
+            ReactionBurstView.play(in: self.view, center: burstCenter, colors: [
+                theme.list.itemAccentColor,
+                UIColor(rgb: 0xffd36b),
+                UIColor(rgb: 0xff7eb6),
+                UIColor.white
+            ])
+        }
+        
         self.targetView = targetView
         
         let itemNode: ReactionNode?

@@ -330,9 +330,22 @@ class TabBarNode: ASDisplayNode, ASGestureRecognizerDelegate {
     
     var reduceMotion: Bool = false
     
+    /// Soft pill behind the selected tab's icon; it stretches toward the new tab on change.
+    private let selectionIndicatorLayer = CAGradientLayer()
+    private let selectionIndicatorSheen = CAGradientLayer()
+    private var selectionIndicatorCenterX: CGFloat?
+    
     var selectedIndex: Int? {
         didSet {
             if self.selectedIndex != oldValue {
+                self.updateSelectionIndicator(previousIndex: oldValue, animated: true)
+                
+                // The newly selected icon hops up and settles with a spring.
+                if oldValue != nil, !self.reduceMotion, !UIAccessibility.isReduceMotionEnabled, let selectedIndex = self.selectedIndex, selectedIndex < self.tabBarNodeContainers.count {
+                    let iconLayer = self.tabBarNodeContainers[selectedIndex].imageNode.layer
+                    iconLayer.animateScale(from: 0.76, to: 1.0, duration: 0.55, timingFunction: kCAMediaTimingFunctionSpring)
+                    iconLayer.animatePosition(from: CGPoint(x: 0.0, y: 8.0), to: CGPoint(), duration: 0.55, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                }
                 if let oldValue = oldValue {
                     self.updateNodeImage(oldValue, layout: true)
                 }
@@ -396,6 +409,17 @@ class TabBarNode: ASDisplayNode, ASGestureRecognizerDelegate {
         }
         self.tapRecognizer = recognizer
         self.view.addGestureRecognizer(recognizer)
+        
+        self.selectionIndicatorLayer.isHidden = true
+        self.selectionIndicatorLayer.masksToBounds = true
+        self.selectionIndicatorLayer.startPoint = CGPoint(x: 0.5, y: 0.0)
+        self.selectionIndicatorLayer.endPoint = CGPoint(x: 0.5, y: 1.0)
+        self.selectionIndicatorSheen.startPoint = CGPoint(x: 0.0, y: 0.5)
+        self.selectionIndicatorSheen.endPoint = CGPoint(x: 1.0, y: 0.5)
+        self.selectionIndicatorSheen.colors = [UIColor.white.withAlphaComponent(0.0).cgColor, UIColor.white.withAlphaComponent(0.5).cgColor, UIColor.white.withAlphaComponent(0.0).cgColor]
+        self.selectionIndicatorSheen.opacity = 0.0
+        self.selectionIndicatorLayer.addSublayer(self.selectionIndicatorSheen)
+        self.layer.insertSublayer(self.selectionIndicatorLayer, above: self.backgroundNode.layer)
     }
     
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -649,6 +673,21 @@ class TabBarNode: ASDisplayNode, ASGestureRecognizerDelegate {
             if let validLayout = self.validLayout {
                 self.updateLayout(size: validLayout.0, leftInset: validLayout.1, rightInset: validLayout.2, additionalSideInsets: validLayout.3, bottomInset: validLayout.4, transition: .immediate)
             }
+            
+            // A new or changed badge pops in with an overshoot.
+            if !value.isEmpty, !self.reduceMotion, !UIAccessibility.isReduceMotionEnabled {
+                let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+                pop.values = [0.2, 1.45, 0.85, 1.12, 1.0]
+                pop.keyTimes = [0.0, 0.3, 0.55, 0.78, 1.0]
+                pop.duration = 0.55
+                pop.timingFunctions = [
+                    CAMediaTimingFunction(name: .easeOut),
+                    CAMediaTimingFunction(name: .easeInEaseOut),
+                    CAMediaTimingFunction(name: .easeInEaseOut),
+                    CAMediaTimingFunction(name: .easeInEaseOut)
+                ]
+                self.tabBarNodeContainers[index].badgeContainerNode.layer.add(pop, forKey: "badgePop")
+            }
         }
     }
     
@@ -781,6 +820,119 @@ class TabBarNode: ASDisplayNode, ASGestureRecognizerDelegate {
                     container.badgeTextNode.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((backgroundFrame.size.width - badgeSize.width) / 2.0), y: 1.0), size: badgeSize)
                 }
             }
+            
+            self.updateSelectionIndicator(previousIndex: nil, animated: false)
+        }
+    }
+    
+    /// Places the indicator behind the selected tab's icon. On a selection change it
+    /// stretches from the old tab to the new one and then contracts, like a drop of liquid.
+    private func updateSelectionIndicator(previousIndex: Int?, animated: Bool) {
+        guard self.isNodeLoaded, !self.horizontal, let selectedIndex = self.selectedIndex, selectedIndex < self.tabBarNodeContainers.count else {
+            self.selectionIndicatorLayer.isHidden = true
+            return
+        }
+        let selectedFrame = self.tabBarNodeContainers[selectedIndex].imageNode.frame
+        if selectedFrame.width <= 1.0 {
+            return
+        }
+        
+        let size = CGSize(width: 62.0, height: 34.0)
+        let centerX = selectedFrame.midX
+        let centerY = selectedFrame.minY + 17.0
+        
+        let layer = self.selectionIndicatorLayer
+        layer.isHidden = false
+        layer.cornerRadius = size.height / 2.0
+        let accent = self.theme.rootController.tabBar.selectedIconColor
+        layer.colors = [accent.withAlphaComponent(0.26).cgColor, accent.withAlphaComponent(0.1).cgColor]
+        layer.borderWidth = 0.5
+        layer.borderColor = accent.withAlphaComponent(0.28).cgColor
+        self.selectionIndicatorSheen.bounds = CGRect(origin: CGPoint(), size: CGSize(width: 26.0, height: size.height))
+        self.selectionIndicatorSheen.position = CGPoint(x: -20.0, y: size.height / 2.0)
+        layer.bounds = CGRect(origin: CGPoint(), size: size)
+        layer.position = CGPoint(x: centerX, y: centerY)
+        
+        let previousCenterX = self.selectionIndicatorCenterX
+        self.selectionIndicatorCenterX = centerX
+        
+        if animated, !self.reduceMotion, !UIAccessibility.isReduceMotionEnabled, let previousIndex = previousIndex, previousIndex < self.tabBarNodeContainers.count, let fromX = previousCenterX, abs(fromX - centerX) > 1.0 {
+            let midX = (fromX + centerX) / 2.0
+            let span = abs(centerX - fromX) + size.width
+            
+            let duration: Double = 0.5
+            let timing = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+            
+            let position = CAKeyframeAnimation(keyPath: "position.x")
+            position.values = [fromX, midX, centerX]
+            position.keyTimes = [0.0, 0.45, 1.0]
+            position.timingFunctions = timing
+            position.duration = duration
+            
+            let width = CAKeyframeAnimation(keyPath: "bounds.size.width")
+            width.values = [size.width, span, size.width]
+            width.keyTimes = [0.0, 0.45, 1.0]
+            width.timingFunctions = timing
+            width.duration = duration
+            
+            let height = CAKeyframeAnimation(keyPath: "bounds.size.height")
+            height.values = [size.height, size.height * 0.86, size.height]
+            height.keyTimes = [0.0, 0.45, 1.0]
+            height.timingFunctions = timing
+            height.duration = duration
+            
+            layer.add(position, forKey: "liquidPosition")
+            layer.add(width, forKey: "liquidWidth")
+            layer.add(height, forKey: "liquidHeight")
+            
+            // A bright sheen sweeps across the pill as it settles on the new tab.
+            let sweep = CABasicAnimation(keyPath: "position.x")
+            sweep.fromValue = -20.0
+            sweep.toValue = size.width + 20.0
+            let sheenFade = CAKeyframeAnimation(keyPath: "opacity")
+            sheenFade.values = [0.0, 1.0, 0.0]
+            sheenFade.keyTimes = [0.0, 0.5, 1.0]
+            let sheenGroup = CAAnimationGroup()
+            sheenGroup.animations = [sweep, sheenFade]
+            sheenGroup.duration = 0.5
+            sheenGroup.beginTime = self.selectionIndicatorSheen.convertTime(CACurrentMediaTime(), from: nil) + 0.22
+            sheenGroup.fillMode = .both
+            sheenGroup.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            self.selectionIndicatorSheen.add(sheenGroup, forKey: "sheen")
+        }
+    }
+    
+    /// A soft ring that spreads from a tapped tab, so every tap answers, even on the tab that
+    /// is already selected.
+    private func playTapRipple(at centerX: CGFloat) {
+        if self.reduceMotion || UIAccessibility.isReduceMotionEnabled || self.horizontal {
+            return
+        }
+        let ring = CAShapeLayer()
+        ring.path = UIBezierPath(ovalIn: CGRect(x: -16.0, y: -16.0, width: 32.0, height: 32.0)).cgPath
+        ring.position = CGPoint(x: centerX, y: 20.0)
+        ring.fillColor = nil
+        ring.strokeColor = self.theme.rootController.tabBar.selectedIconColor.withAlphaComponent(0.55).cgColor
+        ring.lineWidth = 1.5
+        ring.opacity = 0.0
+        self.layer.addSublayer(ring)
+        
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.7
+        scale.toValue = 2.0
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0.0, 0.9, 0.0]
+        fade.keyTimes = [0.0, 0.15, 1.0]
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = 0.5
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.fillMode = .forwards
+        group.isRemovedOnCompletion = false
+        ring.add(group, forKey: "tapRipple")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak ring] in
+            ring?.removeFromSuperlayer()
         }
     }
     
@@ -808,6 +960,7 @@ class TabBarNode: ASDisplayNode, ASGestureRecognizerDelegate {
             if let closestNode = closestNode {
                 let container = self.tabBarNodeContainers[closestNode.0]
                 let previousSelectedIndex = self.selectedIndex
+                self.playTapRipple(at: container.imageNode.frame.midX)
                 self.itemSelected(closestNode.0, longTap, [container.imageNode.imageNode, container.imageNode.textImageNode, container.badgeContainerNode])
                 if previousSelectedIndex != closestNode.0 {
                     if let selectedIndex = self.selectedIndex, let _ = self.tabBarItems[selectedIndex].item.animationName {

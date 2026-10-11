@@ -103,6 +103,7 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     private let animationRenderer: MultiAnimationRenderer
     
     public let location: ChatListControllerLocation
+    private var didPlayArchiveEntrance = false
     public let previewing: Bool
     
     let openMessageFromSearchDisposable: MetaDisposable = MetaDisposable()
@@ -2374,8 +2375,48 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     
     public static var sharedPreviousPowerSavingEnabled: Bool?
     
+    override public func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        
+        // Opening the archive: the rows glide in one after another while the screen is still
+        // sliding in, not after it has settled.
+        if case .chatList(.archive) = self.location, animated {
+            self.playArchiveEntrance(attempt: 0, vertical: false)
+        } else if case .chatList(.root) = self.location {
+            // The main chat list rises in row by row the first time it is shown.
+            self.playArchiveEntrance(attempt: 0, vertical: true)
+        }
+    }
+    
+    private func playArchiveEntrance(attempt: Int, vertical: Bool) {
+        if self.didPlayArchiveEntrance || UIAccessibility.isReduceMotionEnabled {
+            return
+        }
+        var rowNodes: [ASDisplayNode] = []
+        self.chatListDisplayNode.mainContainerNode.currentItemNode.forEachItemNode { itemNode in
+            rowNodes.append(itemNode)
+        }
+        if rowNodes.isEmpty {
+            // The list is still loading; try again for a short while, still inside the slide.
+            if attempt < 16 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
+                    self?.playArchiveEntrance(attempt: attempt + 1, vertical: vertical)
+                }
+            }
+            return
+        }
+        self.didPlayArchiveEntrance = true
+        for (rowIndex, itemNode) in rowNodes.enumerated() {
+            let delay = Double(min(rowIndex, 12)) * 0.05
+            let offset = vertical ? CGPoint(x: 0.0, y: 44.0) : CGPoint(x: 60.0, y: 0.0)
+            itemNode.layer.animatePosition(from: offset, to: CGPoint(), duration: 0.6, delay: delay, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+            itemNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.32, delay: delay)
+        }
+    }
+    
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        
                 
         if self.powerSavingMonitoringDisposable == nil {
             self.powerSavingMonitoringDisposable = (self.context.sharedContext.automaticMediaDownloadSettings

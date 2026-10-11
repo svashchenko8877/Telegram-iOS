@@ -6443,6 +6443,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
     }
     
     var didAppear: Bool = false
+    private var lastSettingsCascadeTime: Double = 0.0
     
     private var validLayout: (layout: ContainerViewLayout, navigationHeight: CGFloat)?
     
@@ -7070,8 +7071,70 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
         })
     }
     
+    override public func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        
+        self.playSettingsCascade(attempt: 0)
+    }
+    
+    /// Settings: the sections rise into place one after another whenever the tab is shown (at
+    /// most once every couple of seconds). Switching tabs does not report itself as "animated",
+    /// so this does not depend on that flag, and it retries briefly if the sections have not
+    /// been laid out yet.
+    private func playSettingsCascade(attempt: Int) {
+        if !self.isSettings || UIAccessibility.isReduceMotionEnabled {
+            return
+        }
+        let sections = self.controllerNode.regularSections.values.sorted(by: { $0.frame.minY < $1.frame.minY })
+        if sections.isEmpty {
+            if attempt < 8 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                    self?.playSettingsCascade(attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        let now = CACurrentMediaTime()
+        if now - self.lastSettingsCascadeTime < 2.0 {
+            return
+        }
+        self.lastSettingsCascadeTime = now
+        for (index, section) in sections.enumerated() {
+            let delay = Double(min(index, 8)) * 0.07
+            section.layer.animatePosition(from: CGPoint(x: 0.0, y: 40.0), to: CGPoint(), duration: 0.7, delay: delay, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+            section.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.35, delay: delay)
+        }
+    }
+    
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        
+        // The avatar settles into the header with a soft spring on first appearance, as the
+        // aurora behind it fades up. It is a Core Animation overlay only, so the header's own
+        // scroll transforms are untouched.
+        if !self.didAppear && animated && !UIAccessibility.isReduceMotionEnabled {
+            let avatarLayer = self.controllerNode.headerNode.avatarListNode.avatarContainerNode.layer
+            avatarLayer.animateScale(from: 0.8, to: 1.0, duration: 0.65, timingFunction: kCAMediaTimingFunctionSpring)
+        }
+        
+        // Settings: the sections rise into place one after another.
+        self.playSettingsCascade(attempt: 0)
+        
+        // Profiles: the action buttons pop in one after another and the info sections rise.
+        if !self.isSettings && !self.didAppear && !UIAccessibility.isReduceMotionEnabled {
+            let buttons = self.controllerNode.headerNode.buttonNodes.values.sorted(by: { $0.frame.minX < $1.frame.minX })
+            for (index, button) in buttons.enumerated() {
+                let delay = 0.1 + Double(index) * 0.07
+                button.layer.animateScale(from: 0.2, to: 1.0, duration: 0.55, delay: delay, timingFunction: kCAMediaTimingFunctionSpring)
+                button.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: delay)
+            }
+            let sections = self.controllerNode.regularSections.values.sorted(by: { $0.frame.minY < $1.frame.minY })
+            for (index, section) in sections.enumerated() {
+                let delay = 0.3 + Double(min(index, 6)) * 0.07
+                section.layer.animatePosition(from: CGPoint(x: 0.0, y: 30.0), to: CGPoint(), duration: 0.6, delay: delay, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                section.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3, delay: delay)
+            }
+        }
         
         DispatchQueue.main.async { [weak self] in
             self?.didAppear = true

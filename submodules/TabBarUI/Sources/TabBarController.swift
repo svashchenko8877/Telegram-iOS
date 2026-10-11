@@ -67,6 +67,7 @@ open class TabBarControllerImpl: ViewController, TabBarController {
     }
     
     private var _selectedIndex: Int?
+    private var previousAnimatedIndex: Int?
     public var selectedIndex: Int {
         get {
             if let _selectedIndex = self._selectedIndex {
@@ -284,6 +285,13 @@ open class TabBarControllerImpl: ViewController, TabBarController {
         let tabBarSelectedIndex = self.selectedIndex
         self.tabBarControllerNode.updateSelectedIndex(index: tabBarSelectedIndex)
         
+        // Which way the user moved along the tab bar: the new tab slides in from that side.
+        var slideDirection: CGFloat = 0.0
+        if let previousIndex = self.previousAnimatedIndex, previousIndex != tabBarSelectedIndex {
+            slideDirection = tabBarSelectedIndex > previousIndex ? 1.0 : -1.0
+        }
+        self.previousAnimatedIndex = tabBarSelectedIndex
+        
         var transitionScale: CGFloat = 0.998
         if let currentView = self.currentController?.view {
             transitionScale = (currentView.frame.height - 3.0) / currentView.frame.height
@@ -317,8 +325,11 @@ open class TabBarControllerImpl: ViewController, TabBarController {
             let commit = self.tabBarControllerNode.setCurrentController(currentController)
             if animated {
                 currentController.view.layer.animateScale(from: transitionScale, to: 1.0, duration: 0.15, delay: 0.1, timingFunction: kCAMediaTimingFunctionSpring)
+                if slideDirection != 0.0 && !UIAccessibility.isReduceMotionEnabled {
+                    currentController.view.layer.animatePosition(from: CGPoint(x: 36.0 * slideDirection, y: 0.0), to: CGPoint(), duration: 0.42, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                }
                 currentController.view.layer.allowsGroupOpacity = true
-                currentController.view.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1, completion: { completed in
+                currentController.view.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, completion: { completed in
                     if completed {
                         currentController.view.layer.allowsGroupOpacity = false
                     }

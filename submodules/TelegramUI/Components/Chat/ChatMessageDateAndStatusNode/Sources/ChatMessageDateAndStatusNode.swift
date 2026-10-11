@@ -325,6 +325,21 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
     
     private var backgroundNode: ASImageNode?
     private var blurredBackgroundNode: NavigationBackgroundNode?
+    /// The tick that just changed state pops with an overshoot and settles.
+    private static func tickPopAnimation() -> CAAnimation {
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [0.3, 1.7, 0.85, 1.12, 1.0]
+        pop.keyTimes = [0.0, 0.3, 0.55, 0.78, 1.0]
+        pop.duration = 0.5
+        pop.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut)
+        ]
+        return pop
+    }
+    
     private var checkSentNode: ASImageNode?
     private var checkReadNode: ASImageNode?
     private var clockFrameNode: ASImageNode?
@@ -1277,10 +1292,10 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
                             }
                             
                             if animateSentNode {
-                                strongSelf.checkSentNode?.layer.animateScale(from: 1.3, to: 1.0, duration: 0.1)
+                                strongSelf.checkSentNode?.layer.add(ChatMessageDateAndStatusNode.tickPopAnimation(), forKey: "tickPop")
                             }
                             if animateReadNode {
-                                strongSelf.checkReadNode?.layer.animateScale(from: 1.3, to: 1.0, duration: 0.1)
+                                strongSelf.checkReadNode?.layer.add(ChatMessageDateAndStatusNode.tickPopAnimation(), forKey: "tickPop")
                             }
                         } else if let checkSentNode = strongSelf.checkSentNode, let checkReadNode = strongSelf.checkReadNode {
                             checkSentNode.removeFromSupernode()

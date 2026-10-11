@@ -104,12 +104,15 @@ final class PeerInfoHeaderButtonNode: HighlightableButtonNode {
                 if highlighted {
                     strongSelf.contextMenuActivated = false
                     strongSelf.layer.removeAnimation(forKey: "opacity")
-                    strongSelf.alpha = 0.4
+                    strongSelf.alpha = 0.7
+                    ContainedViewLayoutTransition.animated(duration: 0.18, curve: .easeInOut).updateTransformScale(node: strongSelf, scale: 0.9, beginWithCurrentState: true)
                 } else {
                     strongSelf.alpha = 1.0
                     if !strongSelf.contextMenuActivated {
-                        strongSelf.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.2)
+                        strongSelf.layer.animateAlpha(from: 0.7, to: 1.0, duration: 0.25)
                     }
+                    // Springs back past 1.0 and settles, so the button feels like it pops.
+                    ContainedViewLayoutTransition.animated(duration: 0.5, curve: .customSpring(damping: 18.0, initialVelocity: 0.0)).updateTransformScale(node: strongSelf, scale: 1.0, beginWithCurrentState: true)
                 }
             }
         }

@@ -914,6 +914,12 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
             return .default
         }
         
+        // Holding a message: it sinks a little and a bright outline draws itself around it as
+        // the menu is about to open. Letting go springs it back.
+        self.mainContainerNode.customActivationProgress = { [weak self] progress, update in
+            self?.updateHoldProgress(progress, update)
+        }
+        
         self.mainContainerNode.activated = { [weak self] gesture, location in
             guard let strongSelf = self, let item = strongSelf.item else {
                 return
@@ -1095,6 +1101,32 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         }
         
         process(node: self)
+        
+        // A soft spring "pop" for new incoming messages: the bubble grows in from slightly
+        // smaller and rises into place from its own side. Outgoing messages keep the existing
+        // send transition, and nothing moves under Reduce Motion.
+        if duration > 0.0, !UIAccessibility.isReduceMotionEnabled, let item = self.appliedItem, item.content.effectivelyIncoming(item.context.account.peerId, associatedData: item.associatedData) {
+            self.layer.animateScale(from: 0.9, to: 1.0, duration: 0.45, timingFunction: kCAMediaTimingFunctionSpring)
+            self.layer.animatePosition(from: CGPoint(x: -14.0, y: 16.0), to: CGPoint(), duration: 0.45, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+        } else if duration > 0.0, !UIAccessibility.isReduceMotionEnabled, let item = self.appliedItem, !item.content.effectivelyIncoming(item.context.account.peerId, associatedData: item.associatedData) {
+            // A sent message lands with a little squash and settle once Telegram's own
+            // send transition has put it in place.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) { [weak self] in
+                guard let self else {
+                    return
+                }
+                let landing = CAKeyframeAnimation(keyPath: "transform.scale")
+                landing.values = [1.0, 1.07, 0.98, 1.0]
+                landing.keyTimes = [0.0, 0.3, 0.65, 1.0]
+                landing.duration = 0.45
+                landing.timingFunctions = [
+                    CAMediaTimingFunction(name: .easeOut),
+                    CAMediaTimingFunction(name: .easeInEaseOut),
+                    CAMediaTimingFunction(name: .easeInEaseOut)
+                ]
+                self.mainContainerNode.layer.add(landing, forKey: "sentLanding")
+            }
+        }
     }
     
     override public func animateRemoved(_ currentTimestamp: Double, duration: Double) {
@@ -7400,7 +7432,98 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         var rect = rect
         rect.origin.y = containerSize.height - rect.maxY + self.insets.top
         self.updateAbsoluteRectInternal(rect, within: containerSize)
+        
+        // Depth and lean while scrolling: messages shrink very slightly toward the top and
+        // bottom edges of the chat, and tip back a few degrees in the direction of scrolling,
+        // like a gentle drum. They spring upright when the list stops.
+        if containerSize.height > 1.0 && !UIAccessibility.isReduceMotionEnabled {
+            let halfHeight = containerSize.height / 2.0
+            let distance = min(1.0, abs(rect.midY - halfHeight) / halfHeight)
+            let depthScale = 1.0 - 0.045 * distance * distance
+            
+            let now = CACurrentMediaTime()
+            if let sample = self.scrollSample, now - sample.time > 0.0005, now - sample.time < 0.25 {
+                let velocity = (rect.midY - sample.y) / CGFloat(now - sample.time)
+                let target = max(-1.0, min(1.0, velocity / 1300.0))
+                self.scrollTilt = self.scrollTilt * 0.4 + target * 0.6
+            }
+            self.scrollSample = (now, rect.midY)
+            
+            // Messages lean outward (incoming to the left, outgoing to the right), stretch
+            // along the scroll direction and tip back, more the faster you scroll.
+            let intensity = abs(self.scrollTilt)
+            var lean: CGFloat = 12.0
+            if let item = self.appliedItem, item.content.effectivelyIncoming(item.context.account.peerId, associatedData: item.associatedData) {
+                lean = -12.0
+            }
+            var transform = CATransform3DIdentity
+            transform.m34 = -1.0 / 500.0
+            transform = CATransform3DTranslate(transform, lean * intensity, 0.0, 0.0)
+            transform = CATransform3DRotate(transform, self.scrollTilt * 0.38, 1.0, 0.0, 0.0)
+            transform = CATransform3DScale(transform, depthScale, depthScale * (1.0 + 0.08 * intensity), 1.0)
+            self.mainContainerNode.layer.transform = transform
+            
+            self.scrollRelaxWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.scrollTilt = 0.0
+                self.scrollSample = nil
+                let from = self.mainContainerNode.layer.transform
+                var upright = CATransform3DIdentity
+                upright = CATransform3DScale(upright, depthScale, depthScale, 1.0)
+                self.mainContainerNode.layer.transform = upright
+                self.mainContainerNode.layer.animate(from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: upright), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.6)
+            }
+            self.scrollRelaxWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+        }
     }
+    
+    private var scrollSample: (time: Double, y: CGFloat)?
+    private var scrollTilt: CGFloat = 0.0
+    private let holdOutlineLayer = CAShapeLayer()
+    
+    private func updateHoldProgress(_ progress: CGFloat, _ update: ContextGestureTransition) {
+        let container = self.mainContainerNode.layer
+        if self.holdOutlineLayer.superlayer == nil {
+            self.holdOutlineLayer.fillColor = nil
+            self.holdOutlineLayer.lineWidth = 2.5
+            self.holdOutlineLayer.lineCap = .round
+            self.holdOutlineLayer.shadowOpacity = 0.8
+            self.holdOutlineLayer.shadowRadius = 7.0
+            self.holdOutlineLayer.shadowOffset = CGSize()
+            self.holdOutlineLayer.strokeEnd = 0.0
+            self.holdOutlineLayer.opacity = 0.0
+            container.addSublayer(self.holdOutlineLayer)
+        }
+        
+        switch update {
+        case .begin, .update:
+            container.removeAnimation(forKey: "holdBack")
+            let scale = 1.0 - 0.06 * progress
+            container.sublayerTransform = CATransform3DMakeScale(scale, scale, 1.0)
+            
+            let accent = self.appliedItem?.presentationData.theme.theme.list.itemAccentColor ?? UIColor(rgb: 0x2a9ef1)
+            let bounds = self.mainContainerNode.bounds.insetBy(dx: 1.0, dy: 1.0)
+            self.holdOutlineLayer.frame = self.mainContainerNode.bounds
+            self.holdOutlineLayer.path = UIBezierPath(roundedRect: bounds, cornerRadius: min(18.0, bounds.height / 2.0)).cgPath
+            self.holdOutlineLayer.strokeColor = accent.cgColor
+            self.holdOutlineLayer.shadowColor = accent.cgColor
+            self.holdOutlineLayer.strokeEnd = progress
+            self.holdOutlineLayer.opacity = Float(min(1.0, progress * 2.0))
+        case .ended:
+            let from = container.sublayerTransform
+            container.sublayerTransform = CATransform3DIdentity
+            container.animate(from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: CATransform3DIdentity), keyPath: "sublayerTransform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.5)
+            
+            let fromOpacity = self.holdOutlineLayer.opacity
+            self.holdOutlineLayer.opacity = 0.0
+            self.holdOutlineLayer.animate(from: NSNumber(value: fromOpacity), to: NSNumber(value: Float(0.0)), keyPath: "opacity", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 0.35)
+        }
+    }
+    private var scrollRelaxWork: DispatchWorkItem?
 
     /// Cuts a full-width band out of the bubble background wherever a content node reports content
     /// it cannot render, so the "please update" pill sits in a gap rather than on top of the

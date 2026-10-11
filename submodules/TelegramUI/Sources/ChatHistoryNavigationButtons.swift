@@ -223,9 +223,18 @@ final class ChatHistoryNavigationButtons: ASDisplayNode {
             mentionsOffset += buttonSize.height + 12.0
             upOffset += buttonSize.height + 12.0
 
+            let downWasHidden = self.downButton.isHidden
             self.downButton.isHidden = false
             transition.updateAlpha(node: self.downButton, alpha: 1.0)
             transition.updateTransformScale(node: self.downButton, scale: 1.0)
+            if downWasHidden && !UIAccessibility.isReduceMotionEnabled {
+                // The "scroll to bottom" button bounces in when it first appears.
+                let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
+                bounce.values = [0.3, 1.25, 0.9, 1.05, 1.0]
+                bounce.keyTimes = [0.0, 0.35, 0.6, 0.8, 1.0]
+                bounce.duration = 0.5
+                self.downButton.layer.add(bounce, forKey: "downBounce")
+            }
         } else {
             transition.updateAlpha(node: self.downButton, alpha: 0.0, completion: { [weak self] completed in
                 guard let strongSelf = self, completed else {

@@ -201,6 +201,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     public let textInputNodeClippingContainer: UIView
     public let textInputSeparator: GlassBackgroundView.ContentColorView
     public private(set) var richTextInputNode: ChatRichTextInputNode?
+    private var lastTypingSparkTime: Double = 0.0
     private var textInputNodeLayout: (frame: CGRect, insets: UIEdgeInsets)?
     
     public let textInputBackgroundNode: ASImageNode
@@ -911,6 +912,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             if let strongSelf = self, let interfaceState = strongSelf.presentationInterfaceState, let interfaceInteraction = strongSelf.interfaceInteraction {
                 if let _ = interfaceState.inputTextPanelState.mediaRecordingState {
                     if sendMedia {
+                        // Releasing the mic sends the recording: celebrate it.
+                        if strongSelf.isNodeLoaded, strongSelf.mediaActionButtons.isNodeLoaded {
+                            SendFlourish.playVoice(in: strongSelf.view.window ?? strongSelf.view, from: strongSelf.mediaActionButtons.micButton, tint: interfaceState.theme.list.itemAccentColor)
+                        }
                         interfaceInteraction.finishMediaRecording(.send(viewOnce: strongSelf.viewOnce))
                     } else {
                         strongSelf.audioRecordingRemoveAnimationState = .recordingToAttachButton
@@ -939,6 +944,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         }
         self.mediaActionButtons.micButton.stopRecording = { [weak self] in
             if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction {
+                if strongSelf.isNodeLoaded, strongSelf.mediaActionButtons.isNodeLoaded {
+                    let accent = strongSelf.presentationInterfaceState?.theme.list.itemAccentColor ?? UIColor(rgb: 0x2a9ef1)
+                    SendFlourish.playVoice(in: strongSelf.view.window ?? strongSelf.view, from: strongSelf.mediaActionButtons.micButton, tint: accent)
+                }
                 interfaceInteraction.stopMediaRecording()
                 
                 strongSelf.tooltipController?.dismiss()
@@ -3984,6 +3993,23 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         if self.ignoreChatInputTextNodeDidUpdateText {
             return
         }
+        
+        // Typing: sparks float up from the caret and the send button gives a little nudge.
+        if self.isNodeLoaded, let richInput = self.richTextInputNode, !richInput.text.isEmpty, let presentationInterfaceState = self.presentationInterfaceState {
+            let now = CACurrentMediaTime()
+            if now - self.lastTypingSparkTime > 0.07 {
+                self.lastTypingSparkTime = now
+                let accent = presentationInterfaceState.theme.list.itemAccentColor
+                TypingSparks.play(from: richInput.inputView, in: self.view.window ?? self.view, tint: accent)
+                if self.sendActionButtons.isNodeLoaded && !UIAccessibility.isReduceMotionEnabled {
+                    let nudge = CAKeyframeAnimation(keyPath: "transform.scale")
+                    nudge.values = [1.0, 1.14, 1.0]
+                    nudge.keyTimes = [0.0, 0.4, 1.0]
+                    nudge.duration = 0.22
+                    self.sendActionButtons.sendButton.view.layer.add(nudge, forKey: "typingNudge")
+                }
+            }
+        }
         if let richTextInputNode = self.richTextInputNode, let presentationInterfaceState = self.presentationInterfaceState, let context = self.context {
             let baseFontSize = chatTextInputBaseFontSize(for: presentationInterfaceState.fontSize)
             let fullTranslucency = self.context?.sharedContext.energyUsageSettings.fullTranslucency ?? true
@@ -4900,6 +4926,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             return
         }
         
+        if self.textInputBackgroundNode.isNodeLoaded {
+            FocusGlow.play(on: self.textInputBackgroundNode.view, tint: presentationInterfaceState.theme.list.itemAccentColor)
+        }
+        
         switch presentationInterfaceState.inputMode {
         case .text:
             break
@@ -5626,6 +5656,11 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     }
     
     @objc func sendButtonPressed() {
+        if self.isNodeLoaded, self.sendActionButtons.isNodeLoaded {
+            let accent = self.presentationInterfaceState?.theme.list.itemAccentColor ?? UIColor(rgb: 0x2a9ef1)
+            SendFlourish.play(in: self.view.window ?? self.view, from: self.sendActionButtons.sendButton.view, tint: accent)
+        }
+        
         if let richTextInputNode = self.richTextInputNode, let presentationInterfaceState = self.presentationInterfaceState, let editMessage = presentationInterfaceState.interfaceState.editMessage, let inputTextMaxLength = editMessage.inputTextMaxLength {
             let textCount = Int32(self.richTextInputNode?.text.count ?? 0)
             let remainingCount = inputTextMaxLength - textCount
@@ -5638,6 +5673,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         }
         
         if let presentationInterfaceState = self.presentationInterfaceState, presentationInterfaceState.interfaceState.mediaDraftState != nil {
+            if self.isNodeLoaded, self.sendActionButtons.isNodeLoaded {
+                SendFlourish.playVoice(in: self.view.window ?? self.view, from: self.sendActionButtons.sendButton.view, tint: presentationInterfaceState.theme.list.itemAccentColor)
+            }
             self.interfaceInteraction?.sendRecordedMedia(false, self.viewOnce)
             self.viewOnce = false
         } else {
@@ -5676,6 +5714,15 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     }
 
     @objc func attachmentButtonPressed() {
+        if !UIAccessibility.isReduceMotionEnabled {
+            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+            spin.fromValue = 0.0
+            spin.toValue = CGFloat.pi * 2.0
+            spin.duration = 0.5
+            spin.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
+            self.attachmentButton.layer.add(spin, forKey: "attachSpin")
+        }
+        
         if let presentationInterfaceState = self.presentationInterfaceState, presentationInterfaceState.interfaceState.mediaDraftState != nil {
             self.viewOnce = false
             self.audioRecordingRemoveAnimationState = .previewToAttachButton

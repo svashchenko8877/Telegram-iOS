@@ -173,11 +173,18 @@ public final class ChatMessageSwipeToReplyNode: ASDisplayNode {
         guard !self.animatedWave else {
             return
         }
-        self.layer.transform = CATransform3DMakeScale(1.1, 1.1, 1.0)
-        self.layer.animateScale(from: 1.0, to: 1.1, duration: 0.2, completion: { [weak self] _ in
-            self?.layer.transform = CATransform3DMakeScale(1.0, 1.0, 1.0)
-            self?.layer.animateScale(from: 1.1, to: 1.0, duration: 0.15)
-        })
+        // The reply arrow pops with an overshoot and settles, instead of a single small bump.
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [1.0, 1.32, 0.9, 1.07, 1.0]
+        pop.keyTimes = [0.0, 0.25, 0.5, 0.75, 1.0]
+        pop.duration = 0.5
+        pop.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut)
+        ]
+        self.layer.add(pop, forKey: "replyPop")
         
         self.animatedWave = true
         

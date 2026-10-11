@@ -222,6 +222,8 @@ public final class PeerInfoCoverComponent: Component {
         private let avatarBackgroundPatternContentsLayer: SimpleGradientLayer
         private let avatarBackgroundPatternMaskLayer: SimpleLayer
         private let avatarBackgroundGradientLayer: SimpleGradientLayer
+        private let auroraBackdrop: PeerInfoAuroraBackdrop
+        private let floatingBubbles: PeerInfoFloatingBubbles
         private let backgroundPatternContainer: UIView
         private var logoIcon: ComponentView<Empty>?
         
@@ -257,6 +259,8 @@ public final class PeerInfoCoverComponent: Component {
             self.avatarBackgroundPatternContentsLayer.type = .radial
             
             self.avatarBackgroundPatternMaskLayer = SimpleLayer()
+            self.auroraBackdrop = PeerInfoAuroraBackdrop()
+            self.floatingBubbles = PeerInfoFloatingBubbles()
             self.backgroundPatternContainer = UIView()
             
             super.init(frame: frame)
@@ -265,6 +269,8 @@ public final class PeerInfoCoverComponent: Component {
             
             self.addSubview(self.backgroundView)
             self.layer.addSublayer(self.backgroundGradientLayer)
+            self.layer.addSublayer(self.auroraBackdrop)
+            self.layer.addSublayer(self.floatingBubbles)
             self.layer.addSublayer(self.avatarBackgroundGradientLayer)
             
             self.avatarBackgroundPatternContentsLayer.mask = self.avatarBackgroundPatternMaskLayer
@@ -528,6 +534,40 @@ public final class PeerInfoCoverComponent: Component {
                 transition.containedViewLayoutTransition.animatePositionAdditive(layer: self.backgroundGradientLayer, offset: CGPoint(x: previousPosition.x - updatedPosition.x, y: previousPosition.y - updatedPosition.y))
             } else {
                 self.backgroundGradientLayer.frame = backgroundGradientFrame
+            }
+            
+            // Profiles without a cover colour borrow the theme accent, so the aurora and the
+            // bubbles show up everywhere and not only on coloured profiles.
+            let coverColors = component.subject?.colors(context: component.context, isDark: component.isDark)
+            let accentColor = component.context.sharedContext.currentPresentationData.with { $0 }.theme.list.itemAccentColor
+            let auroraColors: (UIColor, UIColor)? = component.subject == nil ? nil : (coverColors ?? (accentColor, accentColor))
+            self.auroraBackdrop.update(
+                colors: auroraColors,
+                size: availableSize,
+                transition: transition
+            )
+            
+            var bubbleSeed: Int64 = 7
+            switch component.subject {
+            case let .peer(peer), let .managedBot(peer):
+                bubbleSeed = peer.id.toInt64()
+            default:
+                break
+            }
+            if let auroraColors = auroraColors {
+                self.floatingBubbles.isHidden = false
+                self.floatingBubbles.update(
+                    center: component.avatarCenter,
+                    avatarRadius: component.avatarSize.width / 2.0,
+                    avatarScale: component.avatarScale,
+                    tint: auroraColors.0,
+                    seed: bubbleSeed,
+                    alpha: 1.0 - component.avatarTransitionFraction,
+                    size: availableSize,
+                    transition: transition
+                )
+            } else {
+                self.floatingBubbles.isHidden = true
             }
             
             let backgroundFrame = CGRect(origin: CGPoint(x: 0.0, y: -1000.0 + availableSize.height), size: CGSize(width: availableSize.width, height: 1000.0))

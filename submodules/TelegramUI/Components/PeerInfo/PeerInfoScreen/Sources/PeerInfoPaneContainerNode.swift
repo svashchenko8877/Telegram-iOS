@@ -1199,8 +1199,20 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                         }
                     }
                 }
+                // Switching content tabs: besides sliding, the leaving pane recedes and fades,
+                // and the arriving pane grows in from slightly smaller, so the change has depth.
+                var switchDuration: Double = 0.4
+                if case let .animated(duration, _) = transition {
+                    switchDuration = duration
+                }
+                let playSwitchDepth = paneSwitchAnimationOffset != 0.0 && transition.isAnimated && !UIAccessibility.isReduceMotionEnabled
+                
                 if let previousPaneKey = previousPaneKey, key == previousPaneKey {
                     pane.node.frame = adjustedFrame
+                    if playSwitchDepth {
+                        pane.node.layer.animateScale(from: 1.0, to: 0.93, duration: switchDuration)
+                        pane.node.layer.animateAlpha(from: 1.0, to: 0.0, duration: switchDuration)
+                    }
                     let isAnimatingOut = pane.isAnimatingOut
                     pane.isAnimatingOut = true
                     transition.animateFrame(node: pane.node, from: paneFrame, to: paneFrame.offsetBy(dx: -paneSwitchAnimationOffset, dy: 0.0), completion: isAnimatingOut ? nil : { _ in
@@ -1208,6 +1220,10 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
                     })
                 } else if let _ = previousPaneKey, key == self.currentPaneKey {
                     pane.node.frame = adjustedFrame
+                    if playSwitchDepth {
+                        pane.node.layer.animateScale(from: 0.93, to: 1.0, duration: switchDuration * 1.1, timingFunction: kCAMediaTimingFunctionSpring)
+                        pane.node.layer.animateAlpha(from: 0.0, to: 1.0, duration: switchDuration * 0.8)
+                    }
                     let isAnimatingOut = pane.isAnimatingOut
                     pane.isAnimatingOut = true
                     transition.animatePositionAdditive(node: pane.node, offset: CGPoint(x: paneSwitchAnimationOffset, y: 0.0), completion: isAnimatingOut ? nil : {

@@ -1446,6 +1446,15 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
     private var placeholderNode: ShimmerEffectNode?
     private var absoluteLocation: (CGRect, CGSize)?
     
+    // Scroll "jelly": while the list scrolls, avatars and text lag a few points apart in
+    // opposite directions, then spring back together when it stops.
+    private var scrollSample: (time: Double, y: CGFloat)?
+    private var scrollLag: CGFloat = 0.0
+    private var scrollRelaxWork: DispatchWorkItem?
+    private let longPressGlowLayer = CALayer()
+    private var hadUnreadBadge = false
+    private var lastUnreadBadgeWidth: CGFloat = 0.0
+    
     private var hierarchyTrackingLayer: HierarchyTrackingLayer?
     private var cachedDataDisposable = MetaDisposable()
     
@@ -1781,6 +1790,12 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                 let _ = apply(false, false)
             }
         })
+        
+        // Holding a chat: the row sinks a touch, a soft accent glow fills it, and the avatar
+        // lifts out toward you. Letting go (or the menu opening) springs everything back.
+        self.contextContainer.customActivationProgress = { [weak self] progress, update in
+            self?.updateLongPressProgress(progress, update)
+        }
         
         self.contextContainer.shouldBegin = { [weak self] location in
             guard let strongSelf = self, let item = strongSelf.item else {
@@ -4444,6 +4459,18 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     }
                     transition.updateFrame(node: strongSelf.onlineNode, frame: onlineFrame)
                     
+                    // The green "online" dot breathes gently.
+                    if !UIAccessibility.isReduceMotionEnabled, strongSelf.onlineNode.layer.animation(forKey: "onlineBreath") == nil {
+                        let breath = CABasicAnimation(keyPath: "transform.scale")
+                        breath.fromValue = 0.9
+                        breath.toValue = 1.22
+                        breath.duration = 1.3
+                        breath.autoreverses = true
+                        breath.repeatCount = .infinity
+                        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                        strongSelf.onlineNode.layer.add(breath, forKey: "onlineBreath")
+                    }
+                    
                     if let avatarLiveBadge = strongSelf.avatarLiveBadge, let iconImage = avatarLiveBadge.foreground.image, let outlineImage = avatarLiveBadge.outline.image {
                         let outlineInset = (outlineImage.size.height - iconImage.size.height) * 0.5
                         let liveBadgeFrame = CGRect(origin: CGPoint(x: floor((avatarFrame.width - iconImage.size.width) * 0.5), y: avatarFrame.height + 5.0 - iconImage.size.height), size: iconImage.size)
@@ -4644,6 +4671,25 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                             strongSelf.badgeNode.layer.rasterizationScale = UIScreenScale
                             strongSelf.badgeNode.layer.shouldRasterize = true
                         }
+                        
+                        // A new unread badge, or a changed count, pops with an overshoot.
+                        if animateContent, !UIAccessibility.isReduceMotionEnabled, !strongSelf.hadUnreadBadge || abs(strongSelf.lastUnreadBadgeWidth - badgeLayout.width) > 0.5 {
+                            let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+                            pop.values = [0.3, 1.4, 0.88, 1.1, 1.0]
+                            pop.keyTimes = [0.0, 0.3, 0.55, 0.78, 1.0]
+                            pop.duration = 0.55
+                            pop.timingFunctions = [
+                                CAMediaTimingFunction(name: .easeOut),
+                                CAMediaTimingFunction(name: .easeInEaseOut),
+                                CAMediaTimingFunction(name: .easeInEaseOut),
+                                CAMediaTimingFunction(name: .easeInEaseOut)
+                            ]
+                            strongSelf.badgeNode.layer.add(pop, forKey: "unreadPop")
+                        }
+                        strongSelf.hadUnreadBadge = true
+                        strongSelf.lastUnreadBadgeWidth = badgeLayout.width
+                    } else {
+                        strongSelf.hadUnreadBadge = false
                     }
                     
                     if currentMentionBadgeImage != nil || currentBadgeBackgroundImage != nil {
@@ -5540,6 +5586,77 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
         if let shimmerNode = self.placeholderNode {
             shimmerNode.updateAbsoluteRect(rect, within: containerSize)
         }
+        
+        if !UIAccessibility.isReduceMotionEnabled {
+            let now = CACurrentMediaTime()
+            if let sample = self.scrollSample, now - sample.time > 0.0005, now - sample.time < 0.25 {
+                let velocity = (rect.minY - sample.y) / CGFloat(now - sample.time)
+                let target = max(-1.0, min(1.0, velocity / 1200.0))
+                self.scrollLag = self.scrollLag * 0.4 + target * 0.6
+                let intensity = abs(self.scrollLag)
+                // The avatar trails behind the row and shrinks a little; the text leans the
+                // other way and stretches slightly, so the whole row feels like jelly.
+                var avatarTransform = CATransform3DMakeTranslation(0.0, -self.scrollLag * 18.0, 0.0)
+                avatarTransform = CATransform3DScale(avatarTransform, 1.0 - 0.14 * intensity, 1.0 - 0.14 * intensity, 1.0)
+                self.avatarContainerNode.layer.transform = avatarTransform
+                var textTransform = CATransform3DMakeTranslation(self.scrollLag * 0.0, self.scrollLag * 8.0, 0.0)
+                textTransform = CATransform3DScale(textTransform, 1.0, 1.0 + 0.05 * intensity, 1.0)
+                self.mainContentContainerNode.layer.transform = textTransform
+                
+                self.scrollRelaxWork?.cancel()
+                let work = DispatchWorkItem { [weak self] in
+                    self?.relaxScrollLag()
+                }
+                self.scrollRelaxWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.09, execute: work)
+            }
+            self.scrollSample = (now, rect.minY)
+        }
+    }
+    
+    private func updateLongPressProgress(_ progress: CGFloat, _ update: ContextGestureTransition) {
+        let container = self.contextContainer.layer
+        if self.longPressGlowLayer.superlayer == nil {
+            self.longPressGlowLayer.opacity = 0.0
+            container.insertSublayer(self.longPressGlowLayer, at: 0)
+        }
+        
+        switch update {
+        case .begin, .update:
+            container.removeAnimation(forKey: "pressBack")
+            let scale = 1.0 - 0.035 * progress
+            container.sublayerTransform = CATransform3DMakeScale(scale, scale, 1.0)
+            
+            let accent = self.item?.presentationData.theme.list.itemAccentColor ?? UIColor(rgb: 0x2a9ef1)
+            self.longPressGlowLayer.frame = self.contextContainer.bounds
+            self.longPressGlowLayer.backgroundColor = accent.withAlphaComponent(0.16).cgColor
+            self.longPressGlowLayer.opacity = Float(progress)
+            
+            let avatarScale = 1.0 + 0.16 * progress
+            self.avatarNode.layer.transform = CATransform3DMakeScale(avatarScale, avatarScale, 1.0)
+        case .ended:
+            let from = container.sublayerTransform
+            container.sublayerTransform = CATransform3DIdentity
+            container.animate(from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: CATransform3DIdentity), keyPath: "sublayerTransform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.5)
+            
+            let fromAvatar = self.avatarNode.layer.transform
+            self.avatarNode.layer.transform = CATransform3DIdentity
+            self.avatarNode.layer.animate(from: NSValue(caTransform3D: fromAvatar), to: NSValue(caTransform3D: CATransform3DIdentity), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.55)
+            
+            let fromGlow = self.longPressGlowLayer.opacity
+            self.longPressGlowLayer.opacity = 0.0
+            self.longPressGlowLayer.animate(from: NSNumber(value: fromGlow), to: NSNumber(value: Float(0.0)), keyPath: "opacity", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 0.4)
+        }
+    }
+    
+    private func relaxScrollLag() {
+        self.scrollLag = 0.0
+        self.scrollSample = nil
+        for layer in [self.avatarContainerNode.layer, self.mainContentContainerNode.layer] {
+            let from = layer.transform
+            layer.transform = CATransform3DIdentity
+            layer.animate(from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: CATransform3DIdentity), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.55)
+        }
     }
     
     @objc private func compoundTextButtonPressed() {
@@ -5572,6 +5689,12 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
     
     override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25)
+        
+        // A new chat drops in from above with a springy settle.
+        if !UIAccessibility.isReduceMotionEnabled {
+            self.layer.animatePosition(from: CGPoint(x: 0.0, y: -26.0), to: CGPoint(), duration: 0.55, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+            self.layer.animateScale(from: 0.95, to: 1.0, duration: 0.5, timingFunction: kCAMediaTimingFunctionSpring)
+        }
     }
     
     override public func animateRemoved(_ currentTimestamp: Double, duration: Double) {
@@ -5580,6 +5703,10 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
             self.skipFadeout = false
         } else {
             self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false)
+            if !UIAccessibility.isReduceMotionEnabled {
+                // A removed chat slips away to the side as it fades.
+                self.layer.animatePosition(from: CGPoint(), to: CGPoint(x: -36.0, y: 0.0), duration: 0.25, removeOnCompletion: false, additive: true)
+            }
         }
     }
     

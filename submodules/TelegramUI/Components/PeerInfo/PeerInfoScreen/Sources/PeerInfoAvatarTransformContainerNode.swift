@@ -46,6 +46,69 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
     var emojiTapped: (() -> Void)?
     var contextAction: ((ASDisplayNode, ContextGesture?) -> Void)?
     
+    private let holdRingLayer = CAShapeLayer()
+    
+    @objc private func holdGesture(_ recognizer: UILongPressGestureRecognizer) {
+        if self.containerNode.isGestureEnabled {
+            // The context gesture already animates the hold.
+            return
+        }
+        switch recognizer.state {
+        case .began:
+            self.updateHoldProgress(0.0, .begin)
+            let layer = self.avatarNode.layer
+            layer.removeAnimation(forKey: "holdRelease")
+            layer.transform = CATransform3DMakeScale(1.1, 1.1, 1.0)
+            layer.animate(from: NSValue(caTransform3D: CATransform3DIdentity), to: NSValue(caTransform3D: CATransform3DMakeScale(1.1, 1.1, 1.0)), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.5)
+            self.holdRingLayer.removeAllAnimations()
+            self.holdRingLayer.strokeEnd = 1.0
+            self.holdRingLayer.opacity = 1.0
+            self.holdRingLayer.animate(from: NSNumber(value: Float(0.0)), to: NSNumber(value: Float(1.0)), keyPath: "strokeEnd", timingFunction: CAMediaTimingFunctionName.easeInEaseOut.rawValue, duration: 0.45)
+        case .ended, .cancelled, .failed:
+            self.updateHoldProgress(0.0, .ended(0.0))
+        default:
+            break
+        }
+    }
+    
+    private func updateHoldProgress(_ progress: CGFloat, _ update: ContextGestureTransition) {
+        let layer = self.avatarNode.layer
+        if self.holdRingLayer.superlayer == nil {
+            let side: CGFloat = 100.0
+            self.holdRingLayer.frame = CGRect(origin: CGPoint(), size: CGSize(width: side, height: side))
+            self.holdRingLayer.path = UIBezierPath(ovalIn: CGRect(x: -4.0, y: -4.0, width: side + 8.0, height: side + 8.0)).cgPath
+            self.holdRingLayer.fillColor = nil
+            self.holdRingLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
+            self.holdRingLayer.lineWidth = 3.0
+            self.holdRingLayer.lineCap = .round
+            self.holdRingLayer.shadowColor = UIColor.white.cgColor
+            self.holdRingLayer.shadowOpacity = 0.8
+            self.holdRingLayer.shadowRadius = 8.0
+            self.holdRingLayer.shadowOffset = CGSize()
+            self.holdRingLayer.strokeEnd = 0.0
+            self.holdRingLayer.opacity = 0.0
+            self.containerNode.layer.addSublayer(self.holdRingLayer)
+        }
+        
+        switch update {
+        case .begin, .update:
+            layer.removeAnimation(forKey: "holdRelease")
+            let scale = 1.0 + 0.1 * progress
+            layer.transform = CATransform3DMakeScale(scale, scale, 1.0)
+            self.holdRingLayer.removeAnimation(forKey: "holdRingRelease")
+            self.holdRingLayer.strokeEnd = progress
+            self.holdRingLayer.opacity = Float(min(1.0, progress * 2.0))
+        case .ended:
+            let from = layer.transform
+            layer.transform = CATransform3DIdentity
+            layer.animate(from: NSValue(caTransform3D: from), to: NSValue(caTransform3D: CATransform3DIdentity), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.55)
+            
+            let fromOpacity = self.holdRingLayer.opacity
+            self.holdRingLayer.opacity = 0.0
+            self.holdRingLayer.animate(from: NSNumber(value: fromOpacity), to: NSNumber(value: Float(0.0)), keyPath: "opacity", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 0.35)
+        }
+    }
+    
     private var isFirstAvatarLoading = true
     var item: PeerInfoAvatarListItem?
     
@@ -70,6 +133,13 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
         
         let tapGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(self.tapGesture(_:)))
         self.avatarNode.view.addGestureRecognizer(tapGestureRecognizer)
+        
+        // Where the context-menu gesture is switched off (your own avatar in Settings), a plain
+        // hold still charges the picture up.
+        let holdRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.holdGesture(_:)))
+        holdRecognizer.minimumPressDuration = 0.22
+        holdRecognizer.cancelsTouchesInView = false
+        self.avatarNode.view.addGestureRecognizer(holdRecognizer)
        
         self.containerNode.activated = { [weak self] gesture, _ in
             guard let strongSelf = self else {
@@ -78,6 +148,12 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
             tapGestureRecognizer.isEnabled = false
             tapGestureRecognizer.isEnabled = true
             strongSelf.contextAction?(strongSelf.containerNode, gesture)
+        }
+
+        // Holding the picture: it lifts and a glowing ring charges up around it. Letting go,
+        // or the menu opening, springs it back.
+        self.containerNode.customActivationProgress = { [weak self] progress, update in
+            self?.updateHoldProgress(progress, update)
         }
 
         self.hierarchyTrackingLayer.isInHierarchyUpdated = { [weak self] value in
