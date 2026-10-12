@@ -78,6 +78,8 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
     public var contactsController: ContactsController?
     public var callListController: CallListController?
     public var chatListController: ChatListController?
+    public var tonWalletController: TonWalletController?
+    public var findFriendsController: FindFriendsController?
     public var accountSettingsController: PeerInfoScreen?
     
     private var permissionsDisposable: Disposable?
@@ -216,6 +218,12 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
         }
         controllers.append(chatListController)
         
+        let tonWalletController = TonWalletController(context: self.context)
+        controllers.append(tonWalletController)
+        
+        let findFriendsController = FindFriendsController(context: self.context)
+        controllers.append(findFriendsController)
+        
         var restoreSettignsController: (ViewController & SettingsController)?
         if let sharedContext = self.context.sharedContext as? SharedAccountContextImpl {
             restoreSettignsController = sharedContext.switchingData.settingsController
@@ -235,11 +243,14 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
         accountSettingsController.parentController = self
         controllers.append(accountSettingsController)
                 
-        tabBarController.setControllers(controllers, selectedIndex: restoreSettignsController != nil ? (controllers.count - 1) : (controllers.count - 2))
+        let defaultSelectedIndex = controllers.firstIndex(where: { $0 is ChatListController }) ?? max(0, controllers.count - 2)
+        tabBarController.setControllers(controllers, selectedIndex: restoreSettignsController != nil ? (controllers.count - 1) : defaultSelectedIndex)
         
         self.contactsController = contactsController
         self.callListController = callListController
         self.chatListController = chatListController
+        self.tonWalletController = tonWalletController
+        self.findFriendsController = findFriendsController
         self.accountSettingsController = accountSettingsController
         self.rootTabController = tabBarController
         self.pushViewController(tabBarController, animated: false)
@@ -255,6 +266,12 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
             controllers.append(self.callListController!)
         }
         controllers.append(self.chatListController!)
+        if let tonWalletController = self.tonWalletController {
+            controllers.append(tonWalletController)
+        }
+        if let findFriendsController = self.findFriendsController {
+            controllers.append(findFriendsController)
+        }
         controllers.append(self.accountSettingsController!)
         
         rootTabController.setControllers(controllers, selectedIndex: nil)
